@@ -29,11 +29,11 @@ if "HF_HOME" not in os.environ:
 
 print(os.environ["HF_HOME"])
 
-seq_length = 64
-num_samples = 64
+seq_length = 512
+num_samples = 512
 
 
-model_name = "Qwen/Qwen3-8B"
+model_name = "Qwen/Qwen3-4B"
 
 teacher = AutoModelForCausalLM.from_pretrained(
     model_name,
@@ -142,7 +142,7 @@ for layer_idx in range(len(all_layers)):
 
     optimizer = Adam(
         student_layer.parameters(),
-        lr=4e-6,
+        lr=1e-5,
         weight_decay=0.0,
         betas=(0.99, 0.999),
     )
@@ -216,7 +216,7 @@ for layer_idx in range(len(all_layers)):
 
             for ins in tqdm(input_catcher.inputs[layer_name]):
                 batch = ins["args"][0][0]
-                X = X + batch.square().mean(dim=0)
+                X = X + batch.to(student_layer.device).square().mean(dim=0)
 
             alphas[g.block] = (
                 X / len(input_catcher.inputs[layer_name]) + 1e-12
@@ -228,7 +228,6 @@ for layer_idx in range(len(all_layers)):
     for b, a in alphas.items():
         alphas[b] = (a / a.mean()) * 1e-3
 
-    student_layer.device = list(student_layer.parameters())[0].device
 
     for b, a in alphas.items():
         alphas[b] = a.to(student_layer.device)
@@ -387,7 +386,9 @@ for layer_idx in range(len(all_layers)):
     for p, m in param_masks.items():
         p.data.mul_(m)
 
-    layer_ckpt_path = base_dir / f"checkpoints/{model_name}_decoder_{layer_idx}.cpt"
+    layer_ckpt_path = (
+        base_dir / f"checkpoints/{model_name}_decoder_{layer_idx}.cpt"
+    )
     layer_ckpt_path.parent.mkdir(parents=True, exist_ok=True)
     print(f"Saving layer {layer_idx} weights to {layer_ckpt_path}")
 
