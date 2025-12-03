@@ -22,12 +22,14 @@ from bonsainet.evaluate import evaluate_ppl_hf
 
 
 base_dir = Path("/buckets/")
+
+base_dir.mkdir(parents=True, exist_ok=True)
 if "HF_HOME" not in os.environ:
     os.environ["HF_HOME"] = str(base_dir / "datasets/huggingface")
 
 print(os.environ["HF_HOME"])
 
-seq_length = 256
+seq_length = 64
 num_samples = 64
 
 
@@ -386,7 +388,6 @@ for layer_idx in range(len(all_layers)):
         p.data.mul_(m)
 
     layer_ckpt_path = base_dir / f"checkpoints/{model_name}_decoder_{layer_idx}.cpt"
-    )
     layer_ckpt_path.parent.mkdir(parents=True, exist_ok=True)
     print(f"Saving layer {layer_idx} weights to {layer_ckpt_path}")
 
@@ -424,8 +425,8 @@ for layer_idx in range(len(all_layers)):
             p = layer.weight
             print(layer_name, ((p.data.abs() > 1e-12).sum() / p.numel()).item())
 
-    # results = evaluate_ppl_hf(student, tokenizer, silent=True)
-    # print(f"After {layer_name} pruned: ", results)
+    results = evaluate_ppl_hf(student, tokenizer, silent=True)
+    print(f"After {layer_name} pruned: ", results)
     torch.cuda.empty_cache()
 
     for t_input, t_target in zip(teacher_inputs, teacher_targets):
