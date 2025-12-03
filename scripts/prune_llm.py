@@ -42,6 +42,11 @@ teacher = AutoModelForCausalLM.from_pretrained(
 )
 tokenizer = AutoTokenizer.from_pretrained(model_name)
 
+torch.cuda.empty_cache()
+results = evaluate_ppl_hf(teacher, tokenizer, silent=True)
+print("results before pruning: ", results)
+torch.cuda.empty_cache()
+
 student = teacher
 
 print("embed_weights", teacher.model.embed_tokens.weight.numel() / 1000**2)
@@ -100,8 +105,57 @@ input_catcher.detach(layer_name)
 
 
 all_layers = student.model.layers
-prev_layers = []
-for layer_idx in range(len(all_layers)):
+prev_layers = list(range(0))
+
+for layer_idx in range(len(prev_layers)):
+    layer_name = f"decoder_{layer_idx}"
+    print(prev_layers, layer_idx, layer_name)
+
+    teacher_layer = teacher.model.layers[layer_idx]
+    teacher_layer.device = list(teacher_layer.parameters())[0].device
+
+    output_catcher.attach(teacher_layer, layer_name)
+    with torch.no_grad():
+        for model_inputs in tqdm(teacher_inputs):
+            model_inputs = transfer_to_device(
+                model_inputs, teacher_layer.device
+            )
+            _ = teacher_layer(model_inputs["args"][0], **model_inputs["kwargs"])
+
+    teacher_targets = output_catcher.outputs[layer_name]
+    output_catcher.detach(layer_name)
+
+    student_layer = student.model.layers[layer_idx]
+    layer_ckpt_path = (
+        base_dir / f"/checkpoints/{model_name}_decoder_{layer_idx}.cpt"
+    )
+    print("Loading:", layer_ckpt_path)
+    student_layer.load_state_dict(torch.load(layer_ckpt_path))
+
+    torch.cuda.empty_cache()
+
+    for t_input, t_target in zip(teacher_inputs, teacher_targets):
+        t_input["args"] = (t_target,)
+
+    output_catcher.attach(student_layer, layer_name)
+    with torch.no_grad():
+        for model_inputs in tqdm(student_inputs):
+            model_inputs = transfer_to_device(
+                model_inputs, student_layer.device
+            )
+            _ = student_layer(model_inputs["args"][0], **model_inputs["kwargs"])
+
+    for s_input, s_target in zip(
+        student_inputs, output_catcher.outputs[layer_name]
+    ):
+        s_input["args"] = (s_target,)
+
+    output_catcher.detach(layer_name)
+
+    torch.cuda.empty_cache()
+
+
+for layer_idx in range(len(prev_layers), len(all_layers)):
     layer_name = f"decoder_{layer_idx}"
     print(prev_layers, layer_idx, layer_name)
 
@@ -227,7 +281,7 @@ for layer_idx in range(len(all_layers)):
 
     for b, a in alphas.items():
         alphas[b] = (a / a.mean()) * 1e-3
-
+        alphas[b].clamp_(min=1e-4)
 
     for b, a in alphas.items():
         alphas[b] = a.to(student_layer.device)
