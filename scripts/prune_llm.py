@@ -21,19 +21,23 @@ from bonsainet.proximals import AdamProxy
 from bonsainet.evaluate import evaluate_ppl_hf
 
 
-base_dir = Path("/buckets/")
+# base_dir = Path("/buckets/")
+base_dir = Path("~/scratch/buckets/")
 
 base_dir.mkdir(parents=True, exist_ok=True)
-if "HF_HOME" not in os.environ:
-    os.environ["HF_HOME"] = str(base_dir / "datasets/huggingface")
+# if "HF_HOME" not in os.environ:
+os.environ["HF_HOME"] = str(base_dir / "datasets/huggingface")
 
 print(os.environ["HF_HOME"])
 
-seq_length = 512
-num_samples = 512
+seq_length = 1024
+num_samples = 1024
 
+threshold_epochs = 5
 
-model_name = "Qwen/Qwen3-4B"
+recover_epochs = 10
+
+model_name = "Qwen/Qwen3-8B"
 
 teacher = AutoModelForCausalLM.from_pretrained(
     model_name,
@@ -41,11 +45,6 @@ teacher = AutoModelForCausalLM.from_pretrained(
     device_map="auto",
 )
 tokenizer = AutoTokenizer.from_pretrained(model_name)
-
-torch.cuda.empty_cache()
-results = evaluate_ppl_hf(teacher, tokenizer, silent=True)
-print("results before pruning: ", results)
-torch.cuda.empty_cache()
 
 student = teacher
 
@@ -127,7 +126,7 @@ for layer_idx in range(len(prev_layers)):
 
     student_layer = student.model.layers[layer_idx]
     layer_ckpt_path = (
-        base_dir / f"/checkpoints/{model_name}_decoder_{layer_idx}.cpt"
+        base_dir / f"checkpoints/{model_name}_decoder_{layer_idx}.cpt"
     )
     print("Loading:", layer_ckpt_path)
     student_layer.load_state_dict(torch.load(layer_ckpt_path))
@@ -153,6 +152,11 @@ for layer_idx in range(len(prev_layers)):
     output_catcher.detach(layer_name)
 
     torch.cuda.empty_cache()
+
+# torch.cuda.empty_cache()
+# results = evaluate_ppl_hf(teacher, tokenizer, silent=True)
+# print("results before pruning: ", results)
+# torch.cuda.empty_cache()
 
 
 for layer_idx in range(len(prev_layers), len(all_layers)):
@@ -196,9 +200,9 @@ for layer_idx in range(len(prev_layers), len(all_layers)):
 
     optimizer = Adam(
         student_layer.parameters(),
-        lr=1e-5,
+        lr=2e-5,
         weight_decay=0.0,
-        betas=(0.99, 0.999),
+        betas=(0.9, 0.999),
     )
 
     criterion = nn.MSELoss()
@@ -237,11 +241,10 @@ for layer_idx in range(len(prev_layers), len(all_layers)):
 
     lambds = {g: torch.zeros_like(g.kth_largest(None, 1)) for g in groups}
 
-    beta = 0.98
+    beta = 0.9
 
     proxy = AdamProxy(optimizer)
 
-    epochs = 10
 
     import numpy as np
 
@@ -312,10 +315,10 @@ for layer_idx in range(len(prev_layers), len(all_layers)):
 
     torch.cuda.empty_cache()
 
-    for epoch in range(epochs):
+    for epoch in range(threshold_epochs):
         pbar = tqdm(
             np.random.permutation(len(student_inputs)),
-            desc=f"Epoch {epoch + 1}/{epochs}",
+            desc=f"Epoch {epoch + 1}/{threshold_epochs}",
         )
         total_loss = 0.0
         num_batches = 0
@@ -345,9 +348,11 @@ for layer_idx in range(len(prev_layers), len(all_layers)):
 
                 gradient, lr, conditioner = proxy.get_info(block.param)
                 psi = (gradient - alphas[g.block] * block.param.data).abs()
-                lambds[g].mul_(beta).add_(
-                    (1 - beta) * g.kth_largest({block: psi}, num_nz=g_nnz + 1)
-                )
+                vals = g.kth_largest({block: psi}, num_nz=g_nnz + 1)
+                vals.add_(g.kth_largest({block: psi}, num_nz=g_nnz))
+                vals.mul_(0.5)
+
+                lambds[g].mul_(beta).add_((1 - beta) * vals)
                 g.soft_threshold(
                     lambds[g] * lr, conditioners={block: conditioner}
                 )
@@ -390,14 +395,14 @@ for layer_idx in range(len(prev_layers), len(all_layers)):
     optimizer = AdamW(
         student_layer.parameters(),
         lr=4e-5,
-        weight_decay=1e-5,
-        betas=(0.95, 0.999),
+        weight_decay=1e-3,
+        betas=(0.9, 0.999),
     )
 
-    for epoch in range(epochs):
+    for epoch in range(recover_epochs):
         pbar = tqdm(
             np.random.permutation(len(student_inputs)),
-            desc=f"Epoch {epoch + 1}/{epochs}",
+            desc=f"Epoch {epoch + 1}/{recover_epochs}",
         )
         total_loss = 0.0
         num_batches = 0
