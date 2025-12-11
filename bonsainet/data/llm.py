@@ -1,4 +1,3 @@
-
 from typing import Tuple
 import torch
 from torch.utils.data import Dataset
@@ -65,7 +64,6 @@ def set_seed(seed):
 class TokenizerWrapper:
     def __init__(self, input_ids):
         self.input_ids = input_ids
-
 
 
 # Code adapted from https://github.com/IST-DASLab/sparsegpt/blob/master/datautils.py
@@ -157,9 +155,7 @@ def get_c4(num_samples, seed, seq_len, tokenizer):
         train_samples.append((input_ids, target_ids))
 
     # Build a long validation sequence by concatenating many validation texts
-    concatenated_validation_text = " ".join(
-        validation_dataset[:1100]["text"]
-    )
+    concatenated_validation_text = " ".join(validation_dataset[:1100]["text"])
     validation_tokenized = tokenizer(
         concatenated_validation_text,
         return_tensors="pt",
@@ -180,3 +176,14 @@ def get_loaders(name, nsamples=128, seed=0, seqlen=2048, tokenizer=None):
         return get_wikitext2(nsamples, seed, seqlen, tokenizer)
     if "c4" in name:
         return get_c4(nsamples, seed, seqlen, tokenizer)
+
+
+def sharded_dataset(
+    dataset_name,
+    dataset_partition,
+    num_shards,
+    shard_id,
+    streaming=True,
+    split="train",
+):
+    pass
