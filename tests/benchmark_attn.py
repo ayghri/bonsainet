@@ -42,66 +42,74 @@ def benchmark_sdpa_kernel():
         ("efficient_attention", SDPBackend.EFFICIENT_ATTENTION),
         ("math", SDPBackend.MATH),
     ]:
-        torch.cuda.synchronize()
+        for is_causal in [False, True]:
+            print(f"Benchmarking {name} with is_causal={is_causal}")
 
-        start_mem = torch.cuda.memory_allocated()
-        forward_times = 0
-        backward_times = 0
-        forward_mems = []
-        backward_mems = []
+            torch.cuda.synchronize()
 
-        with sdpa_kernel(backend):
-            for _ in range(n_iters):
-                torch.cuda.empty_cache()
+            start_mem = torch.cuda.memory_allocated()
+            forward_times = 0
+            backward_times = 0
+            forward_mems = []
+            backward_mems = []
 
-                start_mem = torch.cuda.memory_allocated()
+            with sdpa_kernel(backend):
+                for _ in range(n_iters):
+                    torch.cuda.empty_cache()
+                    start_mem = torch.cuda.memory_allocated()
+                    torch.cuda.synchronize()
+                    start = time.time()
+                    out_kernel = scaled_dot_product_attention(
+                        queries,
+                        keys,
+                        values,
+                        attn_mask=None,
+                        dropout_p=0.0,
+                        is_causal=is_causal,
+                    )
+                    torch.cuda.synchronize()
+                    end = time.time()
+
+                    end_mem = torch.cuda.memory_allocated()
+                    forward_times += end - start
+                    forward_mems.append(end_mem - start_mem)
+
+                    loss = out_kernel.sum()
+
+                    torch.cuda.synchronize()
+                    start_mem = torch.cuda.memory_allocated()
+                    start = time.time()
+                    loss.backward()
+                    torch.cuda.synchronize()
+                    end = time.time()
+                    end_mem = torch.cuda.memory_allocated()
+
+                    backward_mems.append(end_mem - start_mem)
+                    backward_times += end - start
+                    torch.cuda.empty_cache()
+
+
                 torch.cuda.synchronize()
-                start = time.time()
-                out_kernel = scaled_dot_product_attention(
-                    queries,
-                    keys,
-                    values,
-                    attn_mask=None,
-                    dropout_p=0.0,
-                    is_causal=False,
+
+                for p in [keys, values, queries]:
+                    p.grad = None
+
+                print(
+                    f"{name} forward time: {forward_times / n_iters:.4f} seconds per iteration"
                 )
-                torch.cuda.synchronize()
-                end = time.time()
+                print(
+                    f"{name} forward memory usage: {np.max(forward_mems) / (1024**2):.2f} MB"
+                )
+                print(
+                    f"{name} backward time: {backward_times / n_iters:.4f} seconds per iteration"
+                )
+                print(
+                    f"{name} backward memory usage: {np.max(backward_mems) / (1024**2):.2f} MB"
+                )
 
-                end_mem = torch.cuda.memory_allocated()
-                forward_times += end - start
-                forward_mems.append(end_mem - start_mem)
-
-                loss = out_kernel.sum()
-
-                torch.cuda.synchronize()
-                start_mem = torch.cuda.memory_allocated()
-                start = time.time()
-                loss.backward()
-                torch.cuda.synchronize()
-                end = time.time()
-                end_mem = torch.cuda.memory_allocated()
-
-                backward_mems.append(end_mem - start_mem)
-                backward_times += end - start
                 torch.cuda.empty_cache()
-
-        torch.cuda.synchronize()
-        end_mem = torch.cuda.memory_allocated()
-        print(
-            f"{name} forward time: {forward_times / n_iters:.4f} seconds per iteration"
-        )
-        print(
-            f"{name} forward memory usage: {np.max(forward_mems) / (1024**2):.2f} MB"
-        )
-        print(
-            f"{name} backward time: {backward_times / n_iters:.4f} seconds per iteration"
-        )
-        print(
-            f"{name} backward memory usage: {np.max(backward_mems) / (1024**2):.2f} MB"
-        )
-
-        torch.cuda.empty_cache()
+                print("-" * 25)
+    print("=" * 50)
 
 
 if __name__ == "__main__":
