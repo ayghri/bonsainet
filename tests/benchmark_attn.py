@@ -31,6 +31,8 @@ queries = nn.Parameter(
 
 # let's add memory peak usage tracking
 
+outs = {}
+
 
 def benchmark_sdpa_kernel():
     import time
@@ -59,7 +61,7 @@ def benchmark_sdpa_kernel():
                     start_mem = torch.cuda.memory_allocated()
                     torch.cuda.synchronize()
                     start = time.time()
-                    out_kernel = scaled_dot_product_attention(
+                    outs[("name", is_causal)] = scaled_dot_product_attention(
                         queries,
                         keys,
                         values,
@@ -74,7 +76,7 @@ def benchmark_sdpa_kernel():
                     forward_times += end - start
                     forward_mems.append(end_mem - start_mem)
 
-                    loss = out_kernel.sum()
+                    loss = outs[("name", is_causal)].sum()
 
                     torch.cuda.synchronize()
                     start_mem = torch.cuda.memory_allocated()
@@ -131,7 +133,7 @@ def benchmark_sdpa_kernel():
                     torch.cuda.synchronize()
                     start = time.time()
                     with torch.no_grad():
-                        out_kernel = scaled_dot_product_attention(
+                        outs[("name", is_causal)] = scaled_dot_product_attention(
                             queries,
                             keys,
                             values,
